@@ -16,14 +16,16 @@ import random as r
 import fake_game_engine
 # import game_engine
 
-HOST = '0.0.0.0' # server IP
+HOST = '0.0.0.0'
 PORT = 12345 # server port
 
 # Window constant
-WINDOW_HEIGHT = 800
-WINDOW_WIDTH = 600
+SCREEN_HEIGHT = 800
+SCREEN_WIDTH = 600
 
 clients = [] # list of clients
+players = []
+food_list = []
 
 class Client:
     """
@@ -33,66 +35,121 @@ class Client:
         self.client_socket = client_socket
         self.client_id = client_id
 
-player = {
-    "name": "",
-    "age": ""
-}
-obj_props = ["name", "age"]
+class Player:
+    """
+    Player class
+    """
+    def __init__(self, name, player_id):
+        self.id = player_id
+        self.name = name
+        self.dir = r.randint(0, 360)
+        self.color = (r.randint(0,255), r.randint(0,255), r.randint(0,255))
+        self.radius = 8
+        self.x = r.randint(self.radius, SCREEN_WIDTH-self.radius)
+        self.y = r.randint(self.radius, SCREEN_HEIGHT-self.radius)
+        self.speed = 0
+        self.score = 0
 
-def msg_to_obj_translator(message):
+class Food:
     """
-    For translating message to obj.
+    Food class
     """
-    data_list = message.split('/')
-    for i in range(len(obj_props)):
-        player[obj_props[i]] = data_list[i]
-    
-    print(player)
+    def __init__(self):
+        self.color = (r.randint(0,255), r.randint(0,255), r.randint(0,255))
+        self.radius = r.randint(3,5)
+        self.x = r.randint(50,SCREEN_WIDTH-50)
+        self.y = r.randint(50,SCREEN_HEIGHT-50)
 
-def obj_to_msg_translator(obj):
+def food_generator():
     """
-    For translating object to message
+    generating food
+    """
+    while len(food_list) != 50:
+        food = Food()
+        food_list.append(food)
+
+def translate_data():
+    """
+    turn an object data into message
     """
     message = ""
-    for value in obj.values():
-        message += value + '/'
-    
-    print(obj_to_msg_translator)
+    for player in players:
+        for data in list(player.__dict__.values()):
+            message += data + ','
+        message = message[:-1] + ';'
 
-def send_data_to_client(graphic_object):
+    message = message[:-1] + "/"
+
+    for food in food_list:
+        for data in list(food.__dict__.values()):
+            message += data + ','
+        message = message[:-1] + ';'
+
+    message = message[:-1]
+
+    return message
+
+def broad_data_to_clients():
     """
     Sending back data to all the clients client
     """
+    message = translate_data()
     for client in clients:
-        client.send(graphic_object)
+        client.client_socket.send(message.encode())
 
-def handle_client_data(client, conn):
+def handle_game_state(client, key):
+    """
+    Use game_engine
+    Update position, etc
+    """
+    if len(food_list) != 50:
+        food_generator()
+
+    players[client.client_id] = fake_game_engine.calculate(players[client.client_id], key)
+
+    broad_data_to_clients()
+
+
+def create_player(cli, conn):
+    """
+    Creating player for client
+    """
+    name = ""
+    cli.client_socket.send("Enter your name: ").encode()
+    while True:
+        name_chunk = conn.recv(1024).decode()
+        if name_chunk:
+            if name_chunk == "\n":
+                break
+            name += name_chunk
+        else:
+            break
+    player = Player(name, cli.client_id)
+    players.append(player)
+
+
+def handle_key(client, conn):
     """
     For recieve data from client (every player's properties)
     
     Data can be calculate inside here. (Maybe)
     """
 
-    # game_engine.calculate(some_data)
-    # send_data_to_client(client, some_graphic_data)
-
     while True:
         # wait for a data from client
-        message = ""
+        key = ""
         while True:
             data = conn.recv(1024).decode()
             if data:
-                if data == "\n":
-                    break
-                message += data
+                # if data == "\n":
+                #     break
+                key += data
             else:
                 break
 
-        if message:
-            msg_to_obj_translator(message)
-            # fake_game_engine.calculate(some_obj) # whatever this is
-        else:
-            break
+        if key:
+            handle_game_state(client, key)
+
 
 def init_server():
     """
@@ -122,8 +179,9 @@ def init_server():
         print(f"Client: {address} join the room.")
         cli = Client(conn, len(clients))
         clients.append(cli)
-        cli_thread = threading.Thread(target=handle_client_data,args=(cli, conn))
+        cli_thread = threading.Thread(target=handle_key,args=(cli, conn))
         cli_thread.start()
+        create_player(cli, conn)
 
 init_server()
 

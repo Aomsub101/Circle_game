@@ -1,3 +1,7 @@
 graphic.py
 fake_game_engine.py
 test.py
+client.py
+data_transter.py
+
+__pycache__/

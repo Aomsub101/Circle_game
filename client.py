@@ -5,6 +5,7 @@ For testing and real use in game.
 
 import socket
 import threading
+import graphic
 
 HOST = "127.0.0.1" # server IP
 PORT = 12345 # server port
