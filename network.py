@@ -11,46 +11,88 @@ Compose with
 
 import socket
 import threading
+import sys
 import random as r
+import fake_game_engine
 # import game_engine
 
 HOST = '0.0.0.0' # server IP
 PORT = 12345 # server port
 
 # Window constant
-WINDOW_HEIGHT = 500
-WINDOW_WIDTH = 500
+WINDOW_HEIGHT = 800
+WINDOW_WIDTH = 600
 
 clients = [] # list of clients
 
 class Client:
     """
-    Class client. Compose with
-        1. init - for handling client simple data.
+    Client class.
     """
     def __init__(self, client_socket, client_id):
         self.client_socket = client_socket
         self.client_id = client_id
-        self.x = r.randint() # Add range
-        self.y = r.randint() # Add range
-        self.radius = 10 # Change radius
-        self.vx = 1 # change speed
-        self.vy = 1 # change speed
 
-def send_data_to_client(client, graphic_object):
-    """
-    Sending back data to client
-    """
-    client.send(graphic_object)
+player = {
+    "name": "",
+    "age": ""
+}
+obj_props = ["name", "age"]
 
-def handle_client_data(client, ):
+def msg_to_obj_translator(message):
     """
-    For recieve data from client (w,a,d)
+    For translating message to obj.
+    """
+    data_list = message.split('/')
+    for i in range(len(obj_props)):
+        player[obj_props[i]] = data_list[i]
+    
+    print(player)
+
+def obj_to_msg_translator(obj):
+    """
+    For translating object to message
+    """
+    message = ""
+    for value in obj.values():
+        message += value + '/'
+    
+    print(obj_to_msg_translator)
+
+def send_data_to_client(graphic_object):
+    """
+    Sending back data to all the clients client
+    """
+    for client in clients:
+        client.send(graphic_object)
+
+def handle_client_data(client, conn):
+    """
+    For recieve data from client (every player's properties)
+    
     Data can be calculate inside here. (Maybe)
     """
 
     # game_engine.calculate(some_data)
     # send_data_to_client(client, some_graphic_data)
+
+    while True:
+        # wait for a data from client
+        message = ""
+        while True:
+            data = conn.recv(1024).decode()
+            if data:
+                if data == "\n":
+                    break
+                message += data
+            else:
+                break
+
+        if message:
+            msg_to_obj_translator(message)
+            # fake_game_engine.calculate(some_obj) # whatever this is
+        else:
+            break
 
 def init_server():
     """
@@ -63,7 +105,7 @@ def init_server():
     except OSError as msg:
         server_socket = None
         print(f'Error creating socket: {msg}')
-        exit(1)
+        sys.exit(1)
 
     # binding and open for connection
     try:
@@ -71,16 +113,18 @@ def init_server():
         server_socket.listen()
         print('Waiting for connection...')
     except OSError as msg:
-        print('Error binding/listening!')
+        print('Error binding/listening!: ', msg)
         server_socket.close()
-        exit(1)
+        sys.exit(1)
 
     while True:
-        connection, address = server_socket.accept()
+        conn, address = server_socket.accept()
         print(f"Client: {address} join the room.")
-        cli = Client(connection, len(clients))
+        cli = Client(conn, len(clients))
         clients.append(cli)
-        cli_thread = threading.Thread(target=handle_client_data,args=(cli,))
+        cli_thread = threading.Thread(target=handle_client_data,args=(cli, conn))
         cli_thread.start()
 
 init_server()
+
+# End of file
