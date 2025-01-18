@@ -4,12 +4,10 @@ import sys
 import time
 from game_engine import Player, Food, FOOD_COUNT, parse_keys, generate_state_string, GOAL_SCORE
 
-# ------- Constants ---------
 HOST = '0.0.0.0'  # Listen on all available interfaces
 PORT = 12345
 
 UPDATE_RATE = 1/60  # 60 FPS
-# --------------------------
 
 class GameServer:
     def __init__(self):
@@ -21,18 +19,15 @@ class GameServer:
         
     def start(self):
         """Initialize and start the game server"""
-        # Initialize socket
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.bind((HOST, PORT))
             self.server_socket.listen()
             print(f"Server started on port {PORT}")
             
-            # Start game update thread
             update_thread = threading.Thread(target=self.update_loop)
             update_thread.start()
             
-            # Accept client connections
             while self.running:
                 client_socket, address = self.server_socket.accept()
                 print(f"New connection from {address}")
@@ -51,26 +46,21 @@ class GameServer:
     def handle_client(self, client_socket, address):
         """Handle individual client connection"""
         try:
-            # Wait for initial name
             name_data = client_socket.recv(1024).decode().strip()
             if not name_data:
                 return
-                
-            # Create new player
+            
             with self.lock:
                 client_id = len(self.clients)
                 self.clients[client_id] = client_socket
                 self.players[client_id] = Player(name_data, client_id)
-                
-            # Main client loop
+
             while self.running:
                 try:
-                    # Receive key data
                     data = client_socket.recv(1024)
                     if not data:
                         break
                         
-                    # Handle player reset request (after death/win)
                     if data == b"RESET":
                         name_data = client_socket.recv(1024).decode().strip()
                         with self.lock:
@@ -79,7 +69,6 @@ class GameServer:
                             self.players[client_id].won_last_match = old_won
                         continue
                         
-                    # Process normal key input
                     with self.lock:
                         if client_id in self.players:
                             keys = parse_keys(data)
@@ -107,7 +96,6 @@ class GameServer:
             start_time = time.time()
             
             with self.lock:
-                # Ensure enough food
                 while len(self.foods) < FOOD_COUNT:
                     self.foods.append(Food())
                     
@@ -130,9 +118,7 @@ class GameServer:
                             
                     # Check win condition
                     if player.score >= GOAL_SCORE:
-                        # Set winner flag
                         player.won_last_match = 1
-                        # Reset all players
                         for client_socket in self.clients.values():
                             client_socket.send(b"WINNER:" + player.name.encode())
                         self.players.clear()
@@ -147,7 +133,6 @@ class GameServer:
                     except ConnectionError:
                         continue
                         
-            # Maintain update rate
             elapsed = time.time() - start_time
             if elapsed < UPDATE_RATE:
                 time.sleep(UPDATE_RATE - elapsed)
