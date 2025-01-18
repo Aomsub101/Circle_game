@@ -1,188 +1,168 @@
-"""
-์Networking file.
-Handling data traffic from client
-
-Compose with
-1. importing game_engine to calculate data from client
-2. Have Client class for needed client data
-3. have handle_client_data func.
-4. have init_server function for initilize connection
-"""
-
 import socket
 import threading
 import sys
-import random as r
-import fake_game_engine
-# import game_engine
+import time
+from game_engine import Player, Food, FOOD_COUNT, parse_keys, generate_state_string, GOAL_SCORE
 
-HOST = '0.0.0.0'
-PORT = 12345 # server port
+# ------- Constants ---------
+HOST = '0.0.0.0'  # Listen on all available interfaces
+PORT = 12345
 
-# Window constant
-SCREEN_HEIGHT = 800
-SCREEN_WIDTH = 600
+UPDATE_RATE = 1/60  # 60 FPS
+# --------------------------
 
-clients = [] # list of clients
-players = []
-food_list = []
-
-class Client:
-    """
-    Client class.
-    """
-    def __init__(self, client_socket, client_id):
-        self.client_socket = client_socket
-        self.client_id = client_id
-
-class Player:
-    """
-    Player class
-    """
-    def __init__(self, name, player_id):
-        self.id = player_id
-        self.name = name
-        self.dir = r.randint(0, 360)
-        self.color = (r.randint(0,255), r.randint(0,255), r.randint(0,255))
-        self.radius = 8
-        self.x = r.randint(self.radius, SCREEN_WIDTH-self.radius)
-        self.y = r.randint(self.radius, SCREEN_HEIGHT-self.radius)
-        self.speed = 0
-        self.score = 0
-
-class Food:
-    """
-    Food class
-    """
+class GameServer:
     def __init__(self):
-        self.color = (r.randint(0,255), r.randint(0,255), r.randint(0,255))
-        self.radius = r.randint(3,5)
-        self.x = r.randint(50,SCREEN_WIDTH-50)
-        self.y = r.randint(50,SCREEN_HEIGHT-50)
+        self.clients = {}  # client_id -> socket
+        self.players = {}  # client_id -> Player
+        self.foods = []
+        self.running = True
+        self.lock = threading.Lock()  # For thread-safe state updates
+        
+    def start(self):
+        """Initialize and start the game server"""
+        # Initialize socket
+        try:
+            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_socket.bind((HOST, PORT))
+            self.server_socket.listen()
+            print(f"Server started on port {PORT}")
+            
+            # Start game update thread
+            update_thread = threading.Thread(target=self.update_loop)
+            update_thread.start()
+            
+            # Accept client connections
+            while self.running:
+                client_socket, address = self.server_socket.accept()
+                print(f"New connection from {address}")
+                
+                # Start client handler thread
+                client_thread = threading.Thread(
+                    target=self.handle_client,
+                    args=(client_socket, address)
+                )
+                client_thread.start()
+                
+        except Exception as e:
+            print(f"Server error: {e}")
+            self.cleanup()
+            
+    def handle_client(self, client_socket, address):
+        """Handle individual client connection"""
+        try:
+            # Wait for initial name
+            name_data = client_socket.recv(1024).decode().strip()
+            if not name_data:
+                return
+                
+            # Create new player
+            with self.lock:
+                client_id = len(self.clients)
+                self.clients[client_id] = client_socket
+                self.players[client_id] = Player(name_data, client_id)
+                
+            # Main client loop
+            while self.running:
+                try:
+                    # Receive key data
+                    data = client_socket.recv(1024)
+                    if not data:
+                        break
+                        
+                    # Handle player reset request (after death/win)
+                    if data == b"RESET":
+                        name_data = client_socket.recv(1024).decode().strip()
+                        with self.lock:
+                            old_won = self.players[client_id].won_last_match
+                            self.players[client_id] = Player(name_data, client_id)
+                            self.players[client_id].won_last_match = old_won
+                        continue
+                        
+                    # Process normal key input
+                    with self.lock:
+                        if client_id in self.players:
+                            keys = parse_keys(data)
+                            self.players[client_id].update(keys)
+                            
+                except ConnectionError:
+                    break
+                    
+        except Exception as e:
+            print(f"Client handler error: {e}")
+            
+        finally:
+            # Cleanup disconnected client
+            with self.lock:
+                if client_id in self.clients:
+                    del self.clients[client_id]
+                if client_id in self.players:
+                    del self.players[client_id]
+            client_socket.close()
+            print(f"Client {address} disconnected")
+            
+    def update_loop(self):
+        """Main game update loop"""
+        while self.running:
+            start_time = time.time()
+            
+            with self.lock:
+                # Ensure enough food
+                while len(self.foods) < FOOD_COUNT:
+                    self.foods.append(Food())
+                    
+                # Check collisions
+                for player in list(self.players.values()):
+                    # Food collisions
+                    for food in list(self.foods):
+                        if player.check_food_collision(food):
+                            player.eat_food()
+                            self.foods.remove(food)
+                            
+                    # Player collisions
+                    for other in list(self.players.values()):
+                        if player.check_player_collision(other):
+                            player.eat_player(other)
+                            # Notify client of death
+                            self.clients[other.client_id].send(b"DEAD")
+                            # Remove eaten player
+                            del self.players[other.client_id]
+                            
+                    # Check win condition
+                    if player.score >= GOAL_SCORE:
+                        # Set winner flag
+                        player.won_last_match = 1
+                        # Reset all players
+                        for client_socket in self.clients.values():
+                            client_socket.send(b"WINNER:" + player.name.encode())
+                        self.players.clear()
+                        self.foods.clear()
+                        break
+                        
+                # Broadcast game state
+                state = generate_state_string(self.players.values(), self.foods)
+                for client_socket in self.clients.values():
+                    try:
+                        client_socket.send(state.encode())
+                    except ConnectionError:
+                        continue
+                        
+            # Maintain update rate
+            elapsed = time.time() - start_time
+            if elapsed < UPDATE_RATE:
+                time.sleep(UPDATE_RATE - elapsed)
+                
+    def cleanup(self):
+        """Clean up server resources"""
+        self.running = False
+        for client_socket in self.clients.values():
+            client_socket.close()
+        self.server_socket.close()
 
-def food_generator():
-    """
-    generating food
-    """
-    while len(food_list) != 50:
-        food = Food()
-        food_list.append(food)
-
-def translate_data():
-    """
-    turn an object data into message
-    """
-    message = ""
-    for player in players:
-        for data in list(player.__dict__.values()):
-            message += data + ','
-        message = message[:-1] + ';'
-
-    message = message[:-1] + "/"
-
-    for food in food_list:
-        for data in list(food.__dict__.values()):
-            message += data + ','
-        message = message[:-1] + ';'
-
-    message = message[:-1]
-
-    return message
-
-def broad_data_to_clients():
-    """
-    Sending back data to all the clients client
-    """
-    message = translate_data()
-    for client in clients:
-        client.client_socket.send(message.encode())
-
-def handle_game_state(client, key):
-    """
-    Use game_engine
-    Update position, etc
-    """
-    if len(food_list) != 50:
-        food_generator()
-
-    players[client.client_id] = fake_game_engine.calculate(players[client.client_id], key)
-
-    broad_data_to_clients()
-
-
-def create_player(cli, conn):
-    """
-    Creating player for client
-    """
-    name = ""
-    cli.client_socket.send("Enter your name: ").encode()
-    while True:
-        name_chunk = conn.recv(1024).decode()
-        if name_chunk:
-            if name_chunk == "\n":
-                break
-            name += name_chunk
-        else:
-            break
-    player = Player(name, cli.client_id)
-    players.append(player)
-
-
-def handle_key(client, conn):
-    """
-    For recieve data from client (every player's properties)
-    
-    Data can be calculate inside here. (Maybe)
-    """
-
-    while True:
-        # wait for a data from client
-        key = ""
-        while True:
-            data = conn.recv(1024).decode()
-            if data:
-                # if data == "\n":
-                #     break
-                key += data
-            else:
-                break
-
-        if key:
-            handle_game_state(client, key)
-
-
-def init_server():
-    """
-    Initialize server socket and open for connection
-    """
-    # creating server socket
+if __name__ == "__main__":
+    server = GameServer()
     try:
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        print('Socket created')
-    except OSError as msg:
-        server_socket = None
-        print(f'Error creating socket: {msg}')
-        sys.exit(1)
-
-    # binding and open for connection
-    try:
-        server_socket.bind((HOST, PORT))
-        server_socket.listen()
-        print('Waiting for connection...')
-    except OSError as msg:
-        print('Error binding/listening!: ', msg)
-        server_socket.close()
-        sys.exit(1)
-
-    while True:
-        conn, address = server_socket.accept()
-        print(f"Client: {address} join the room.")
-        cli = Client(conn, len(clients))
-        clients.append(cli)
-        cli_thread = threading.Thread(target=handle_key,args=(cli, conn))
-        cli_thread.start()
-        create_player(cli, conn)
-
-init_server()
-
-# End of file
+        server.start()
+    except KeyboardInterrupt:
+        print("\nServer shutting down...")
+        server.cleanup()
