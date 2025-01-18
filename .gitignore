@@ -2,6 +2,6 @@ graphic.py
 fake_game_engine.py
 test.py
 client.py
-data_transter.py
+data_transfer.py
 
 __pycache__/
