@@ -4,7 +4,8 @@ import threading
 import sys
 from graphics_engine import GraphicsEngine
 from game_engine import parse_state_string
-
+import logging
+from logging.handlers import RotatingFileHandler
 # ------- Constants ---------
 SERVER_HOST = 'localhost'
 SERVER_PORT = 12345
@@ -16,6 +17,20 @@ CONTROL_KEYS = {pygame.K_w: 'w',
 
 UPDATE_RATE = 1/60
 # --------------------------
+
+logger = logging.getLogger()
+
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+rotating_handler = RotatingFileHandler(
+    filename = 'log/client_logs.log',
+    maxBytes=1024*1024,
+    backupCount=5,
+)
+
+rotating_handler.setFormatter(formatter)
+logger.setLevel(logging.INFO)
+logger.addHandler(rotating_handler)
 
 class GameClient:
     def __init__(self):
@@ -63,13 +78,16 @@ class GameClient:
                 if event.type == pygame.QUIT:
                     self.running = False
                     return
-                    
+
             keys = pygame.key.get_pressed()
+            # Add log here +++++++++++++++++++++++++
+
             pressed = []
             for key, value in CONTROL_KEYS.items():
                 if keys[key]:
                     pressed.append(value)
-                    
+                    logger.info("key pressed: %s", value)
+
             try:
                 if pressed:
                     self.socket.send(','.join(pressed).encode())
@@ -101,11 +119,11 @@ class GameClient:
                     if not name:
                         self.running = False
                         break
-                    
+
                     self.socket.send(b"RESET")
                     self.socket.send(name.encode())
                     continue
-                    
+
                 try:
                     players, foods = parse_state_string(data.decode())
                     with self.lock:
@@ -114,16 +132,16 @@ class GameClient:
                 except Exception as e:
                     print(f"Error parsing game state: {e}")
                     continue
-                    
+
             except ConnectionError:
                 print("Lost connection to server")
                 break
-                
+
         self.running = False
-        
+
     def cleanup(self):
         self.running = False
-        self.socket.close()
+        self.socket.close() 
         self.graphics.cleanup()
 
 if __name__ == "__main__":
